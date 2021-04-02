@@ -397,7 +397,7 @@ float GPSMinDistance = 0;    //Tune this value; minimum distance robot needs to 
 float GPSMaxDistance = 10;      //max distance robot can be expected to travel between data
 float DistanceRTK = 0;          //distance traveled calculated using X and Y positions
 
-//Set orgin as the location of the base station. Update if location Changed!!
+//Set orgin as the location of the coordinate Orgin. Update if location Changed!!
 //float LatOrgin = 30.421948;
 //float LongOrgin = -84.319579;
 float LatOrgin = 30.42487;
