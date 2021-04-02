@@ -2,9 +2,10 @@
 //  for   https://github.com/p-h-a-i-l/hoverboard-firmware-hack
 //  visit https://pionierland.de/hoverhack/ to compile your firmware online :-)
 
+
+void Setup_Odometry();
+
 //#define DEBUG_RX
-
-
 
 float Last_Error_Angle = 0;
 float Derrivative = 0;
@@ -12,7 +13,6 @@ float Derrivative = 0;
 //Lidar and Ultrasonic Inputs
 const int Lidarpin = 12;  // the number of the pushbutton pin
 const int Ultrasonicpin =  13;    // the number of the LED pin
-
 
 int estop = 1;
 int endstop = 1;
@@ -30,23 +30,15 @@ int turnRate = 0;
 float iSpeedL = 0;
 float iSpeedR = 0;
 
-
-
 //Waypoint Variables
 
-         float WaypointX[] = {100,100, 8, 12,15,18};
-         float WaypointY[] = {0,0, 0, 0, 0, 0};
+         float WaypointX[] = {20,-20, 20,-20,20,-20};
+         float WaypointY[] = {7,7, 7, 7, 7, 7};
          
          int WP_num = 0; //What waypoint we are on
          float isteer = 0;
          
           float Error_Angle = 0;
-
-
-
-
-
-
 
 //Odometry Variables
 float V = 0;
@@ -55,37 +47,29 @@ float L = .545; //distance between wheels in meters
 float theta = 0;
 float last_theta = 0;
 
-float Xpos = 0;
-float Ypos = 0;
-float ThetaPOS = 0;
+float WheelV_Xpos = 0;
+float WheelV_Ypos = 0;
+float WheelV_ThetaPOS = 0;
 
 float k00 = 0;
 float k01 = 0;
 float k02 = 0;
-
 float k10 = 0;
 float k11 = 0;
 float k12 = 0;
-
 float k20 = 0;
 float k21 = 0;
 float k22 = 0;
-
 float k30 = 0;
 float k31 = 0;
 float k32 = 0;
 
-float t = 0.005; //time step (S) recommended 1/200
-
-
-
-
+float t = 0.005; //time step (S) recommended 1/200s
 
 //Set up SPIFFS (file system)
 #include "FS.h"
 #include "SPIFFS.h"
 #define FORMAT_SPIFFS_IF_FAILED false //Set as true only for the first time you ever run
-
 
 
 //Setup ISR Variables
@@ -106,14 +90,10 @@ portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
 // that means an 8 point moving average.
 FIR<float, 8> fir;
 
-
-
 #include <math.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
-
-
-
+#include <esp_now.h>
 
 //Set up motor controller
 
@@ -159,7 +139,7 @@ float Currenty = 0;
 
 
 //File system Functions:
-void listDir(fs::FS &fs, const char * dirname, uint8_t levels){
+;void listDir(fs::FS &fs, const char * dirname, uint8_t levels){
     Serial.printf("Listing directory: %s\r\n", dirname);
 
     File root = fs.open(dirname);
@@ -314,9 +294,89 @@ void IRAM_ATTR onTimer() {
   portEXIT_CRITICAL_ISR(&timerMux);
 }
 
-// variables for storing the lidar and ultrasonic status 
-int LidarState = 0;
-int UltrasonicState = 0;
+
+//Lidar and Ultrasonic ESPNow Communication
+// Structure example to receive data
+// Must match the sender structure
+typedef struct struct_message {
+    int MotorPower;
+    bool a;
+    bool b;
+    bool c;
+    bool d;
+    bool e;
+    bool f;
+    bool g;
+    bool h;
+    bool device;
+} struct_message;
+
+// Create a struct_message called myData
+struct_message myData;
+
+
+// callback function that will be executed when data is received
+void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
+  memcpy(&myData, incomingData, sizeof(myData));
+  Serial.println("Lidar or Ultrasonic?");
+  Serial.println(myData.device);
+
+if(myData.device == 0){ //Ultrasonic Sensor
+
+
+Serial.println("8 Ultrasonic data: ");
+  Serial.println(myData.a);
+  Serial.println(myData.b);
+  Serial.println(myData.c);
+  Serial.println(myData.d);
+  Serial.println(myData.e);
+  Serial.println(myData.f);
+  Serial.println(myData.g);
+  Serial.println(myData.h);
+  Serial.println(" ");
+ 
+      if(myData.a && myData.b && myData.c && myData.d && myData.e && myData.f && myData.g && myData.h){//if ultrasonic sensor detects
+      estop = 0;
+
+
+      }
+    else {
+      estop = 1;
+    }
+      
+
+}
+
+if(myData.device == 1){ //Lidar
+
+
+             Serial.println("Motor Power Value: ");
+          Serial.println(myData.MotorPower);
+  
+      if(myData.MotorPower <= 100){//if ultrasonic sensor detects 
+      estop = 0;
+
+      }
+          else {
+      estop = 1;
+    }
+
+}
+
+
+
+
+} 
+
+
+
+
+
+//This is the corrected RTK and Wheel velocity position
+float Corrected_X = 0;
+float Corrected_Y = 0;
+float Corrected_Theta = 0;
+
 
 //Set up RTK GPS input
 #define RXD2 4
@@ -328,43 +388,65 @@ float latitude, longitude, m2;
 int sign, d, m1; 
 char dir; 
 
+float Xpos = 0;
+float Ypos = 0;
+float ThetaPOS = 0;
+float RTKLastX = 0;
+float RTKLastY = 0;
+float GPSMinDistance = 0;    //Tune this value; minimum distance robot needs to travel for movement to register: 0.05
+float GPSMaxDistance = 10;      //max distance robot can be expected to travel between data
+float DistanceRTK = 0;          //distance traveled calculated using X and Y positions
+
+//Set orgin as the location of the base station. Update if location Changed!!
+//float LatOrgin = 30.421948;
+//float LongOrgin = -84.319579;
+float LatOrgin = 30.42487;
+float LongOrgin = -84.30500;
 
 void setup() 
 {
-//Set up ultrasonic and Lidar inputs
+  //Set up ultrasonic and Lidar inputs
   pinMode(Lidarpin, INPUT);
   pinMode(Ultrasonicpin, INPUT);
 
+  // Set device as a Wi-Fi Station
+  WiFi.mode(WIFI_STA);
+  
+  // Init ESP-NOW
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("Error initializing ESP-NOW");
+    return;
+  }
+  
+  // Once ESPNow is successfully Init, we will register for recv CB to
+  // get recv packer info
+  esp_now_register_recv_cb(OnDataRecv);
 
-//2000000 is 1 second
-//Setup Timer ISR
-timer = timerBegin(0, 80, true);
+
+
+  //2000000 is 1 second
+  //Setup Timer ISR
+  timer = timerBegin(0, 80, true);
   timerAttachInterrupt(timer, &onTimer, true);
   timerAlarmWrite(timer, 5000, true); //every 1/200 set to 5000 seconds -- update this with t!!
   timerAlarmEnable(timer);
 
+  //Initialize File System
+  if(!SPIFFS.begin(FORMAT_SPIFFS_IF_FAILED)){
+    Serial.println("SPIFFS Mount Failed");
+    return;
+  }
 
-//Initialize File System
-if(!SPIFFS.begin(FORMAT_SPIFFS_IF_FAILED)){
-        Serial.println("SPIFFS Mount Failed");
-        return;
-    }
-
-  
-  // For a moving average we want all of the coefficients to be unity.
+  //For a moving average we want all of the coefficients to be unity.
   float coef[8] = { 1., 1., 1., 1., 1., 1., 1., 1.};
 
   // Set the coefficients
   fir.setFilterCoeffs(coef);
-  
-
-  
- 
+    
   Serial.begin(115200);
   Serial.println("Hoverhack Test v1.0");
 
   Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
-
 
   // start communication with IMU 
   status = IMU.begin();
@@ -375,10 +457,9 @@ if(!SPIFFS.begin(FORMAT_SPIFFS_IF_FAILED)){
     Serial.println(status);
     while(1) {}
   }
- 
-    
+     
   oSerial.begin(9600);
-//  pinMode(LED_BUILTIN, OUTPUT);
+  //pinMode(LED_BUILTIN, OUTPUT);
 }
 
 uint32_t crc32_for_byte(uint32_t r) 
@@ -397,11 +478,8 @@ void crc32(const void *data, size_t n_bytes, uint32_t* crc) {
     *crc = table[(uint8_t)*crc ^ ((uint8_t*)data)[i]] ^ *crc >> 8;
 }
 
-
 void Send(int16_t iSpeed,int16_t iSteer)
 {
-
-  
   oCmd.steer = iSteer;
   oCmd.speed = iSpeed;
 
@@ -459,42 +537,39 @@ boolean Receive()
 int count = 0;
 
 void loop(void)
-{ 
-  
-//Timer ISR
-if (interruptCounter > 0) {
+{  
+ //Timer ISR
+ if (interruptCounter > 0) {
  
     portENTER_CRITICAL(&timerMux);
     interruptCounter--;
     portEXIT_CRITICAL(&timerMux);
- 
     totalInterruptCounter++;
 
+    unsigned long iNow = millis();
+    if (Receive())
+    {
+      if (iFailedRec)
+        Serial.println();
+      
+      iFailedRec = 0;
+      //Serial.print("speedL: ");Serial.print(-0.01*(float)oFeedback.iSpeedL);
+      //Serial.print("\tspeedR: ");Serial.print(-0.01*(float)oFeedback.iSpeedR);
+      iSpeedL = -0.01*(float)oFeedback.iSpeedL;
+      iSpeedR = -0.01*(float)oFeedback.iSpeedR;
 
-  unsigned long iNow = millis();
-  if (Receive())
-  {
-    if (iFailedRec)
-      Serial.println();
-    iFailedRec = 0;
-    //Serial.print("speedL: ");Serial.print(-0.01*(float)oFeedback.iSpeedL);
-    //Serial.print("\tspeedR: ");Serial.print(-0.01*(float)oFeedback.iSpeedR);
-iSpeedL = -0.01*(float)oFeedback.iSpeedL;
-iSpeedR = -0.01*(float)oFeedback.iSpeedR;
-
-//twice wheel diameter *2, km/h to m/s *0.278 = 0.556
-iSpeedL *= 0.566;
-iSpeedR *= 0.566;
+      //twice wheel diameter *2, km/h to m/s *0.278 = 0.556
+      iSpeedL *= 0.566;
+      iSpeedR *= 0.566;
 
 
-    //Serial.print("\tskippedL: ");Serial.print(oFeedback.iHallSkippedL);
-    //Serial.print("\tskippedR: ");Serial.print(oFeedback.iHallSkippedR);
-    //Serial.print("\t°C: ");Serial.print(oFeedback.iTemp);
-    //Serial.print("\tU: ");Serial.print(0.01 * (float)oFeedback.iVolt);
-    //Serial.print("\tlA: ");Serial.print(0.01 * (float)oFeedback.iAmpL);
-    //Serial.print("\trA: ");Serial.println(0.01 * (float)oFeedback.iAmpR);
-  }
-
+      //Serial.print("\tskippedL: ");Serial.print(oFeedback.iHallSkippedL);
+      //Serial.print("\tskippedR: ");Serial.print(oFeedback.iHallSkippedR);
+      //Serial.print("\t°C: ");Serial.print(oFeedback.iTemp);
+      //Serial.print("\tU: ");Serial.print(0.01 * (float)oFeedback.iVolt);
+      //Serial.print("\tlA: ");Serial.print(0.01 * (float)oFeedback.iAmpL);
+      //Serial.print("\trA: ");Serial.println(0.01 * (float)oFeedback.iAmpR);
+   }
 
 V = 0.5*(iSpeedL + iSpeedR);//In m/s 
 W = (iSpeedR - iSpeedL)/L; //L = Distance between the point of contact of the two wheels to the ground (in meters)
@@ -516,16 +591,48 @@ k30 = V*cos(last_theta + t*k22);
 k31 = V*sin(last_theta + t*k22);
 k32 = W;
 
-Xpos = Xpos + (t/6*(k00 + 2*(k10+k20) + k30));
-Ypos = Ypos + (t/6*(k01 + 2*(k11+k21) + k31));
-ThetaPOS = ThetaPOS + (t/6*(k02 + 2*(k12+k22) + k32));
+WheelV_Xpos = WheelV_Xpos + (t/6*(k00 + 2*(k10+k20) + k30));
+WheelV_Ypos = WheelV_Ypos + (t/6*(k01 + 2*(k11+k21) + k31));
+WheelV_ThetaPOS = WheelV_ThetaPOS + (t/6*(k02 + 2*(k12+k22) + k32));
+
+//if(WheelV_ThetaPOS>2*3.141593){
+//  WheelV_ThetaPOS = 0;
+//}
+//
+//if(WheelV_ThetaPOS<0){
+//  ThetaPOS = 2*3.141593;
+//}
+
+last_theta = WheelV_ThetaPOS;
 
 
-last_theta = ThetaPOS;
+Corrected_X = WheelV_Xpos + Xpos; //Add RTK position and Wheel Velocity based position
+Corrected_Y = WheelV_Ypos + Ypos; //Add RTK position and Wheel Velocity based position
+Corrected_Theta = WheelV_ThetaPOS + ThetaPOS;
 
-        Error_Angle = ThetaPOS - atan((WaypointY[WP_num]-Ypos)/(WaypointX[WP_num] - Xpos));
+
+        Error_Angle = Corrected_Theta - atan((WaypointY[WP_num]-Corrected_Y)/(WaypointX[WP_num] - Corrected_X));
         Derrivative = Error_Angle - Last_Error_Angle;
         Last_Error_Angle = Error_Angle;
+
+
+
+
+
+
+
+
+//Write code to make speed control loop (So it can go up hills).
+//Operating_Speed = 0;
+//Desired_Velocity = 5;
+//Velocity_Error = (Desired Velocity - V)
+//Operating_Speed = 100*Desired_Velocity + (100 * Velocity_Error); //Ramp velocity as higher value until desired velocity reached
+
+
+
+
+
+
 
 isteer = -1000*Error_Angle + -300000*Derrivative; //Note Need to check derrivative value. Works alright without load, but spins in circles with load (-1000 and -300000) also check signs!
 
@@ -539,7 +646,7 @@ isteer = -1000*Error_Angle + -300000*Derrivative; //Note Need to check derrivati
         {
           isteer = -150;
         }
-        
+  
             //Increment waypoint
            if(abs(Xpos - WaypointX[WP_num]) < 0.25 && abs(Ypos - WaypointY[WP_num]) < 0.25 && WP_num<(sizeof(WaypointX))) {
             WP_num++;
@@ -549,12 +656,17 @@ isteer = -1000*Error_Angle + -300000*Derrivative; //Note Need to check derrivati
             endstop = 0;
            }
 
+
+
+
+
          Send(300*estop*endstop,isteer*estop*endstop); 
 
 
   if (iTimeSend > iNow) return;
   iTimeSend = iNow + TIME_SEND;
-
+  
+/*---------calculating lat and long from gps data---------*/
  while (Serial2.available()) {
     if(char(Serial2.read()) == '$'){
       gpsType=char(Serial2.read()); 
@@ -608,7 +720,6 @@ isteer = -1000*Error_Angle + -300000*Derrivative; //Note Need to check derrivati
 
         //Serial.print("d_lat: ");  
         //Serial.println(d,10);
-
         
         latitude = sign*(d+(m1/60.0)+(m2/60.0)); 
         if(Serial2.available() >0){
@@ -663,91 +774,147 @@ isteer = -1000*Error_Angle + -300000*Derrivative; //Note Need to check derrivati
         
         longitude = sign*(d+(m1/60.0)+(m2/60.0)); 
 
-        Serial.print("Lat: ");
-        Serial.println(latitude, 8);
-        Serial.print("Long: ");
-        Serial.println(longitude, 8);
         //Serial.println(m1);
         //Serial.println(m2, 8);
-                   
+
+
+        //calculate distance travelled based on x and y pos
+
+
+
+
+      //Serial.print("Ypos: ");
+      //Serial.println(Ypos, 8);
+      //Serial.print("RTKLastY: ");
+      //Serial.println(RTKLastY, 8);
+      //Serial.print("Xpos: ");
+      //Serial.println(Xpos, 8);
+      //Serial.print("RTKLastX: ");
+      //Serial.println(RTKLastX, 8);
+
+
+      
+//                          Serial.print("Corrected_X: ");
+//                          Serial.println(Corrected_X, 8);
+//                          Serial.print("Corrected_Y: ");
+//                          Serial.println(Corrected_Y, 8);
+//                          Serial.print("Corrected_Theta: ");
+//                          Serial.println(Corrected_Theta, 8);
+        
+        DistanceRTK = sqrt(sq(Ypos - RTKLastY) + sq(Xpos - RTKLastX));
+        Serial.print("RTK Distance: ");
+        Serial.println(DistanceRTK);
+
+        float temp_GPSDistance; 
+        float Xpos_temp; 
+        float Ypos_temp; 
+        Xpos_temp = (longitude - LongOrgin)*111320;
+        Ypos_temp =(latitude - LatOrgin)*111320;
+        temp_GPSDistance = sqrt(sq(Ypos_temp - RTKLastY) + sq(Xpos_temp - RTKLastX));
+
+
+        //if distance < minDist, robot has not moved
+        //if gpsdistance > max distance, invalid gps coord calculated
+        if((temp_GPSDistance >= GPSMinDistance) && (temp_GPSDistance < GPSMaxDistance))
+            {
+                  //Update Robot Position if valid distance
+                  Xpos = (longitude - LongOrgin)*111320;
+                  Ypos = (latitude - LatOrgin)*111320;
+
+
+
+                   if(temp_GPSDistance >=0.5){
+                   //Update heading based upon RTK GPS if the robot has moved sufficiently
+                  ThetaPOS = atan((Ypos - RTKLastY)/(Xpos - RTKLastX));
+                  if((Xpos - RTKLastX)<0){                 
+                    ThetaPOS = ThetaPOS + 3.141593;
+                  }
+                  
+                          Serial.print("RTKNewangle: ");
+                          Serial.println(ThetaPOS, 8);
+                    
+                   }
+                
+                  
+                  //Store Position for next iteration
+                  RTKLastX = Xpos;
+                  RTKLastY = Ypos;
+
+
+                  //Reset Wheel velocity variables
+                   Reset_Wheel_Odometry();
+
+
+                          
+                          //Serial.print("Lat: ");
+                          //Serial.println(latitude, 8);
+                          //Serial.print("Long: ");
+                          //Serial.println(longitude, 8);
+
+
+
+                          Serial.print("RTKXpos: ");
+                          Serial.println(Xpos, 8);
+                          Serial.print("RTKYpos: ");
+                          Serial.println(Ypos, 8);
+                          
+                  
+                }     
       } 
     }
   }
 
-
-
-
-
-
-LidarState = digitalRead(Lidarpin);
-//UltrasonicState = digitalRead(Ultrasonicpin);
   
-  //Serial.println(LidarState);
-  // check if the Lidar is pressed.
-  // if it is, the buttonState is HIGH
-  if (LidarState == LOW) {
-     estop = 0;
-  } else {
-    estop = 1;
-  }
-
-    //Serial.println(UltrasonicState);
-  // check if the pushbutton is pressed.
-  // if it is, the buttonState is HIGH
-  //if (UltrasonicState == LOW) {
-  //  Send(0,0);
-  //} else {
-  //  // Do nothing
-  //}
-
-
-Serial.print("Error Angle: ");    
-Serial.println(Error_Angle);
-
-Serial.print("Ispeed: ");    
-Serial.println(isteer);
-
-
-  //Print out current position
- Serial.print("Heading: ");
-  Serial.println(ThetaPOS);
-
-
- Serial.print("Angle to waypoint: ");
-  Serial.println(atan((WaypointY[WP_num]-Ypos)/(WaypointX[WP_num] - Xpos))
-);
+  //Serial.print("Error Angle: ");    
+  //Serial.println(Error_Angle);
   
- 
- Serial.print("    Currentx: ");
- Serial.print(Xpos,8);
- Serial.print("    Currenty: ");
- Serial.println(Ypos,8);
-
-
-
- //  Serial.print(" Left: ");
-//  Serial.print(iSpeedL,8);
-// Serial.print("    Right: ");
- //Serial.println(iSpeedR,8);
-
-   // Serial.println(iSpeedL);
+  //Serial.print("Ispeed: ");    
+  //Serial.println(isteer);
+  
+  
+    //Print out current position
+    //Serial.print("Heading: ");
+    //Serial.println(ThetaPOS);
+  
+  
+     //Serial.print("Angle to waypoint: ");
+     //Serial.println(atan((WaypointY[WP_num]-Ypos)/(WaypointX[WP_num] - Xpos)));
+     
+     //Serial.print("    Currentx: ");
+     //Serial.print(Xpos,8);
+     //Serial.print("    Currenty: ");
+     //Serial.println(Ypos,8);
+  
+     //Serial.print(" Left: ");
+     //Serial.print(iSpeedL,8);
+     //Serial.print("    Right: ");
+     //Serial.println(iSpeedR,8);
+     //Serial.println(iSpeedL);
 
   }
 
+}
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-  
-
+void Reset_Wheel_Odometry(){
+                   V = 0;
+                  W = 0;
+                  theta = 0;
+                  last_theta = 0;
+                  WheelV_Xpos = 0;
+                  WheelV_Ypos = 0;
+                  WheelV_ThetaPOS = 0;
+                  k00 = 0;
+                  k01 = 0;
+                  k02 = 0;
+                  k10 = 0;
+                  k11 = 0;
+                  k12 = 0;
+                  k20 = 0;
+                  k21 = 0;
+                  k22 = 0;
+                  k30 = 0;
+                  k31 = 0;
+                  k32 = 0;
 }
