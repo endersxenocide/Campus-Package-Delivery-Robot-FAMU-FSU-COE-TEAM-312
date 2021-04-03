@@ -1,14 +1,11 @@
-//  Arduino Pro Mini 3.3V example
-//  for   https://github.com/p-h-a-i-l/hoverboard-firmware-hack
-//  visit https://pionierland.de/hoverhack/ to compile your firmware online :-)
-
-
 void Setup_Odometry();
 
 //#define DEBUG_RX
 
 float Last_Error_Angle = 0;
-float Derrivative = 0;
+float K_Derrivative = 0;
+float K_Integral = 0;
+float Error_Integral = 0;
 
 //Lidar and Ultrasonic Inputs
 const int Lidarpin = 12;  // the number of the pushbutton pin
@@ -119,7 +116,6 @@ typedef struct{
    uint32_t crc;
 } SerialFeedback;
 SerialFeedback oFeedback;
-
 
 
 // an MPU9250 object with the MPU-9250 sensor on I2C bus 0 with address 0x68
@@ -362,14 +358,7 @@ if(myData.device == 1){ //Lidar
     }
 
 }
-
-
-
-
 } 
-
-
-
 
 
 //This is the corrected RTK and Wheel velocity position
@@ -396,6 +385,7 @@ float RTKLastY = 0;
 float GPSMinDistance = 0;    //Tune this value; minimum distance robot needs to travel for movement to register: 0.05
 float GPSMaxDistance = 10;      //max distance robot can be expected to travel between data
 float DistanceRTK = 0;          //distance traveled calculated using X and Y positions
+
 
 //Set orgin as the location of the coordinate Orgin. Update if location Changed!!
 //float LatOrgin = 30.421948;
@@ -591,33 +581,37 @@ k30 = V*cos(last_theta + t*k22);
 k31 = V*sin(last_theta + t*k22);
 k32 = W;
 
+
 WheelV_Xpos = WheelV_Xpos + (t/6*(k00 + 2*(k10+k20) + k30));
 WheelV_Ypos = WheelV_Ypos + (t/6*(k01 + 2*(k11+k21) + k31));
 WheelV_ThetaPOS = WheelV_ThetaPOS + (t/6*(k02 + 2*(k12+k22) + k32));
 
-//if(WheelV_ThetaPOS>2*3.141593){
-//  WheelV_ThetaPOS = 0;
-//}
-//
-//if(WheelV_ThetaPOS<0){
-//  ThetaPOS = 2*3.141593;
-//}
 
 last_theta = WheelV_ThetaPOS;
 
 
-Corrected_X = WheelV_Xpos + Xpos; //Add RTK position and Wheel Velocity based position
-Corrected_Y = WheelV_Ypos + Ypos; //Add RTK position and Wheel Velocity based position
-Corrected_Theta = WheelV_ThetaPOS + ThetaPOS;
+//Corrected_X = WheelV_Xpos + Xpos; //Add RTK position and Wheel Velocity based position
+//Corrected_Y = WheelV_Ypos + Ypos; //Add RTK position and Wheel Velocity based position
+//Corrected_Theta = WheelV_ThetaPOS + ThetaPOS;
 
 
         Error_Angle = Corrected_Theta - atan((WaypointY[WP_num]-Corrected_Y)/(WaypointX[WP_num] - Corrected_X));
-        Derrivative = Error_Angle - Last_Error_Angle;
+        K_Derrivative = Error_Angle - Last_Error_Angle;
         Last_Error_Angle = Error_Angle;
 
 
-
-
+        /*We don't want the integral error to get
+         * way too large. This is a standard problem
+         * referred to as integral windup. One solution
+         * is to simply restrict the integral error to
+         * reasonable values.*/
+      
+         //Change 50 to something else)
+        Error_Integral = Error_Integral + Error_Angle;
+        if(Error_Integral > 50) 
+          Error_Integral = 50;
+        else if(Error_Integral < -50)
+          Error_Integral = -50;
 
 
 
@@ -631,10 +625,7 @@ Corrected_Theta = WheelV_ThetaPOS + ThetaPOS;
 
 
 
-
-
-
-isteer = -1000*Error_Angle + -300000*Derrivative; //Note Need to check derrivative value. Works alright without load, but spins in circles with load (-1000 and -300000) also check signs!
+isteer = 1000*Error_Angle + K_Integral * Error_Integral;
 
         //These parameters seem reasonable
       
@@ -657,9 +648,6 @@ isteer = -1000*Error_Angle + -300000*Derrivative; //Note Need to check derrivati
            }
 
 
-
-
-
          Send(300*estop*endstop,isteer*estop*endstop); 
 
 
@@ -667,238 +655,12 @@ isteer = -1000*Error_Angle + -300000*Derrivative; //Note Need to check derrivati
   iTimeSend = iNow + TIME_SEND;
   
 /*---------calculating lat and long from gps data---------*/
- while (Serial2.available()) {
-    if(char(Serial2.read()) == '$'){
-      gpsType=char(Serial2.read()); 
-      for(int i=0; i<4; i++)
-          gpsType += char(Serial2.read()); 
-      
-      if(gpsType == "GNGGA"){
-        for(int i=0; i<11; i++)
-            Serial2.read(); 
-        if(Serial2.available() >0){ 
-        intStr=char(Serial2.read());  //dd
-        }
-        if(Serial2.available() >0){
-        intStr+=char(Serial2.read());   
-        } 
-        d=intStr.toInt(); 
-
-        if(Serial2.available() >0){
-        intStr=char(Serial2.read()); //mm
-        }
-        if(Serial2.available() >0){
-        intStr+=char(Serial2.read());
-        }        
-        m1=intStr.toInt(); 
-
-        if(Serial2.available() >0){
-        Serial2.read(); //skipping the decimal point
-        }
-        if(Serial2.available() >0){
-        intStr=char(Serial2.read()); 
-        }
-        for(int i=0; i<4; i++){
-          if(Serial2.available() >0){
-            intStr+=char(Serial2.read()); 
-          }
-        }
-          
-        m2=intStr.toInt(); 
-        m2=m2/100000.0; 
-
-        if(Serial2.available() >0){
-        Serial2.read(); //skipping comma
-        }
-        if(Serial2.available() >0){
-          dir = char(Serial2.read()); 
-        }
-        if(dir == 'N')
-           sign = 1; 
-        else if(dir == 'S')
-          sign = -1; 
-
-        //Serial.print("d_lat: ");  
-        //Serial.println(d,10);
-        
-        latitude = sign*(d+(m1/60.0)+(m2/60.0)); 
-        if(Serial2.available() >0){
-          Serial2.read();             //skipping comma
-        }
-        if(Serial2.available() >0){
-          intStr=char(Serial2.read());      //ddd
-        }
-        if(Serial2.available() >0){
-          intStr+=char(Serial2.read());
-        }
-        if(Serial2.available() >0){ 
-          intStr+=char(Serial2.read()); 
-        }
-        d=intStr.toInt(); 
-        if(Serial2.available() >0){
-          intStr=char(Serial2.read());     //mm
-        }
-        if(Serial2.available() >0){
-          intStr+=char(Serial2.read());   
-        }     
-        m1=intStr.toInt(); 
-
-        if(Serial2.available() >0){
-          Serial2.read();           //skipping the decimal point
-        }
-        if(Serial2.available() >0){
-          intStr=char(Serial2.read());    //mmmmm
-        }
-        for(int i=0; i<4; i++){
-          if(Serial2.available() >0){
-            intStr+=char(Serial2.read()); 
-          }
-        }
-          
-        m2=intStr.toInt(); 
-        m2=m2/100000.0; 
-
-        if(Serial2.available() >0){
-          Serial2.read();           //skipping comma
-        }
-        if(Serial2.available() >0){
-          dir = char(Serial2.read());
-        } 
-        if(dir == 'E')
-           sign = 1; 
-        else if(dir == 'W')
-          sign = -1; 
-
-        //Serial.print("d_lon: ");  
-        //Serial.println(d, 10);
-        
-        longitude = sign*(d+(m1/60.0)+(m2/60.0)); 
-
-        //Serial.println(m1);
-        //Serial.println(m2, 8);
-
-
-        //calculate distance travelled based on x and y pos
-
-
-
-
-      //Serial.print("Ypos: ");
-      //Serial.println(Ypos, 8);
-      //Serial.print("RTKLastY: ");
-      //Serial.println(RTKLastY, 8);
-      //Serial.print("Xpos: ");
-      //Serial.println(Xpos, 8);
-      //Serial.print("RTKLastX: ");
-      //Serial.println(RTKLastX, 8);
-
-
-      
-//                          Serial.print("Corrected_X: ");
-//                          Serial.println(Corrected_X, 8);
-//                          Serial.print("Corrected_Y: ");
-//                          Serial.println(Corrected_Y, 8);
-//                          Serial.print("Corrected_Theta: ");
-//                          Serial.println(Corrected_Theta, 8);
-        
-        DistanceRTK = sqrt(sq(Ypos - RTKLastY) + sq(Xpos - RTKLastX));
-        Serial.print("RTK Distance: ");
-        Serial.println(DistanceRTK);
-
-        float temp_GPSDistance; 
-        float Xpos_temp; 
-        float Ypos_temp; 
-        Xpos_temp = (longitude - LongOrgin)*111320;
-        Ypos_temp =(latitude - LatOrgin)*111320;
-        temp_GPSDistance = sqrt(sq(Ypos_temp - RTKLastY) + sq(Xpos_temp - RTKLastX));
-
-
-        //if distance < minDist, robot has not moved
-        //if gpsdistance > max distance, invalid gps coord calculated
-        if((temp_GPSDistance >= GPSMinDistance) && (temp_GPSDistance < GPSMaxDistance))
-            {
-                  //Update Robot Position if valid distance
-                  Xpos = (longitude - LongOrgin)*111320;
-                  Ypos = (latitude - LatOrgin)*111320;
-
-
-
-                   if(temp_GPSDistance >=0.5){
-                   //Update heading based upon RTK GPS if the robot has moved sufficiently
-                  ThetaPOS = atan((Ypos - RTKLastY)/(Xpos - RTKLastX));
-                  if((Xpos - RTKLastX)<0){                 
-                    ThetaPOS = ThetaPOS + 3.141593;
-                  }
-                  
-                          Serial.print("RTKNewangle: ");
-                          Serial.println(ThetaPOS, 8);
-                    
-                   }
-                
-                  
-                  //Store Position for next iteration
-                  RTKLastX = Xpos;
-                  RTKLastY = Ypos;
-
-
-                  //Reset Wheel velocity variables
-                   Reset_Wheel_Odometry();
-
-
-                          
-                          //Serial.print("Lat: ");
-                          //Serial.println(latitude, 8);
-                          //Serial.print("Long: ");
-                          //Serial.println(longitude, 8);
-
-
-
-                          Serial.print("RTKXpos: ");
-                          Serial.println(Xpos, 8);
-                          Serial.print("RTKYpos: ");
-                          Serial.println(Ypos, 8);
-                          
-                  
-                }     
-      } 
+ 
     }
   }
 
-  
-  //Serial.print("Error Angle: ");    
-  //Serial.println(Error_Angle);
-  
-  //Serial.print("Ispeed: ");    
-  //Serial.println(isteer);
-  
-  
-    //Print out current position
-    //Serial.print("Heading: ");
-    //Serial.println(ThetaPOS);
-  
-  
-     //Serial.print("Angle to waypoint: ");
-     //Serial.println(atan((WaypointY[WP_num]-Ypos)/(WaypointX[WP_num] - Xpos)));
-     
-     //Serial.print("    Currentx: ");
-     //Serial.print(Xpos,8);
-     //Serial.print("    Currenty: ");
-     //Serial.println(Ypos,8);
-  
-     //Serial.print(" Left: ");
-     //Serial.print(iSpeedL,8);
-     //Serial.print("    Right: ");
-     //Serial.println(iSpeedR,8);
-     //Serial.println(iSpeedL);
-
-  }
-
-}
-
-
-
 void Reset_Wheel_Odometry(){
-                   V = 0;
+                  V = 0;
                   W = 0;
                   theta = 0;
                   last_theta = 0;
